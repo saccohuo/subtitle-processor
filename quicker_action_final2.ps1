@@ -121,15 +121,16 @@ function Process-YouTubeUrl {
             url = $url
         } | ConvertTo-Json) -ContentType "application/json"
         
-        if ($response.success) {
+        if ($response.view_url) {
             Write-Host "处理成功" -ForegroundColor Green
-            $viewUrl = "http://localhost:5000$($response.url)"
+            $viewUrl = "http://localhost:5000$($response.view_url)"
             Write-Host "查看地址: $viewUrl"
             Start-Process $viewUrl
             return $true
         }
         else {
-            Write-Host "处理YouTube URL失败: $($response.error)" -ForegroundColor Red
+            $errorMsg = if ($response.error) { $response.error } else { "未知错误" }
+            Write-Host "处理YouTube URL失败: $errorMsg" -ForegroundColor Red
             return $false
         }
     }

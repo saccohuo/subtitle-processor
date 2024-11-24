@@ -1,4 +1,4 @@
-flask==2.3.3
-chardet
+flask
 requests
-yt-dlp
+yt-dlp>=2023.11.16
+chardet
