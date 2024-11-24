@@ -9,160 +9,193 @@ Write-Host "时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor 
 Write-Host ""
 
 # 获取剪贴板内容
-$clipboardText = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Text)
-Write-Host "剪贴板内容类型: Text" -ForegroundColor Yellow
-
-# 尝试获取剪贴板中的文件
-$clipboardFiles = [System.Windows.Forms.Clipboard]::GetFileDropList()
-Write-Host "剪贴板文件数量: $($clipboardFiles.Count)" -ForegroundColor Yellow
-
-# 尝试获取选中的文件路径
-$filePath = $env:QUICKER_SELECTED_FILES
-Write-Host "QUICKER_SELECTED_FILES: $filePath" -ForegroundColor Yellow
-
-# 收集所有要处理的文件
-$filesToProcess = @()
-
-# 处理逻辑：优先使用剪贴板中的文件
-if ($clipboardFiles.Count -gt 0) {
-    foreach ($file in $clipboardFiles) {
-        if ($file.ToLower().EndsWith('.srt')) {
-            $filesToProcess += @{
-                Path = $file
-                Name = [System.IO.Path]::GetFileName($file)
-                Content = Get-Content -Path $file -Raw -Encoding UTF8
-                Type = "file"
-            }
-            Write-Host "添加剪贴板中的.srt文件: $file" -ForegroundColor Green
-        }
+function Get-ClipboardText {
+    try {
+        $clipboardText = [System.Windows.Forms.Clipboard]::GetText()
+        return $clipboardText
+    }
+    catch {
+        Write-Host "获取剪贴板文本失败: $_" -ForegroundColor Red
+        return $null
     }
 }
-# 如果剪贴板中没有.srt文件，检查文本内容是否包含多个文件路径
-elseif ($clipboardText) {
-    $paths = $clipboardText -split "`n" | ForEach-Object { $_.Trim() }
+
+# 获取剪贴板文件
+function Get-DroppedFiles {
+    try {
+        $files = [System.Windows.Forms.Clipboard]::GetFileDropList()
+        if ($files.Count -gt 0) {
+            return $files
+        }
+        return $null
+    }
+    catch {
+        Write-Host "获取剪贴板文件失败: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+# 处理文件路径列表
+function Process-FilePaths {
+    param (
+        [string[]]$paths
+    )
+    
+    $successCount = 0
+    $failCount = 0
+    
     foreach ($path in $paths) {
-        if ($path -and $path.ToLower().EndsWith('.srt') -and (Test-Path -LiteralPath $path)) {
-            $filesToProcess += @{
-                Path = $path
-                Name = [System.IO.Path]::GetFileName($path)
-                Content = Get-Content -Path $path -Raw -Encoding UTF8
-                Type = "file"
+        if (-not $path) { continue }
+        
+        $path = $path.Trim()
+        Write-Host "`n处理文件: $path"
+        
+        if (-not (Test-Path $path)) {
+            Write-Host "文件不存在" -ForegroundColor Red
+            $failCount++
+            continue
+        }
+        
+        try {
+            $form = @{
+                file = Get-Item -Path $path
             }
-            Write-Host "添加文本中的.srt文件路径: $path" -ForegroundColor Green
+            
+            # 添加时间轴显示设置
+            $headers = @{}
+            if ($env:QUICKER_PARAM_SHOW_TIMELINE -eq "false") {
+                $headers["X-Show-Timeline"] = "false"
+            }
+            
+            $response = Invoke-RestMethod -Uri "http://localhost:5000/upload" -Method Post -Form $form -Headers $headers
+            
+            if ($response.success) {
+                Write-Host "上传成功" -ForegroundColor Green
+                $viewUrl = "http://localhost:5000$($response.url)"
+                Write-Host "查看地址: $viewUrl"
+                Start-Process $viewUrl
+                $successCount++
+            }
+            else {
+                Write-Host "上传失败: $($response.error)" -ForegroundColor Red
+                $failCount++
+            }
+        }
+        catch {
+            Write-Host "处理失败: $_" -ForegroundColor Red
+            $failCount++
         }
     }
     
-    # 如果没有找到有效的文件路径，检查是否为srt内容
-    if ($filesToProcess.Count -eq 0 -and $clipboardText -match '^\d+\r?\n\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}') {
-        $filesToProcess += @{
-            Path = $null
-            Name = "clipboard.srt"
-            Content = $clipboardText
-            Type = "content"
-        }
-        Write-Host "使用剪贴板中的srt内容" -ForegroundColor Green
-    }
+    Write-Host "`n处理完成: 成功 $successCount 个, 失败 $failCount 个"
 }
 
-if ($filesToProcess.Count -eq 0) {
-    Write-Host "错误: 未找到有效的srt文件或内容" -ForegroundColor Red
-    [System.Windows.Forms.MessageBox]::Show("请复制.srt文件或内容到剪贴板")
-    Read-Host "按回车键退出"
-    exit
-}
-
-Write-Host "`n开始处理文件..." -ForegroundColor Cyan
-$processedUrls = @()
-
-# 获取Quicker环境变量中的时间轴显示设置
-$showTimeline = $env:QUICKER_PARAM_SHOW_TIMELINE -eq "true"
-Write-Host "时间轴显示设置: $showTimeline" -ForegroundColor Yellow
-
-foreach ($file in $filesToProcess) {
-    Write-Host "`n处理文件: $($file.Name)" -ForegroundColor Cyan
+# 处理SRT内容
+function Process-SrtContent {
+    param (
+        [string]$content
+    )
     
     try {
-        # 准备发送文件
-        $serverUrl = 'http://localhost:5000/upload'
-        Write-Host "服务器地址: $serverUrl" -ForegroundColor Yellow
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        $content | Out-File -FilePath $tempFile -Encoding UTF8
         
-        # 将内容转换为字节
-        $contentBytes = [System.Text.Encoding]::UTF8.GetBytes($file.Content)
+        Process-FilePaths -paths @($tempFile)
         
-        # 构建multipart form数据
-        $boundary = [System.Guid]::NewGuid().ToString()
+        Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Host "处理SRT内容失败: $_" -ForegroundColor Red
+    }
+}
+
+# 处理YouTube URL
+function Process-YouTubeUrl {
+    param (
+        [string]$url
+    )
+    
+    try {
+        Write-Host "正在处理YouTube URL: $url" -ForegroundColor Yellow
+        $response = Invoke-RestMethod -Uri "http://localhost:5000/process_youtube" -Method Post -Body (@{
+            url = $url
+        } | ConvertTo-Json) -ContentType "application/json"
         
-        # 构建请求体
-        $bodyLines = @()
-        $bodyLines += "--$boundary"
-        $bodyLines += "Content-Disposition: form-data; name=`"file`"; filename=`"$($file.Name)`""
-        $bodyLines += "Content-Type: application/octet-stream"
-        $bodyLines += ""
-        
-        # 将header转换为字节
-        $headerBytes = [System.Text.Encoding]::UTF8.GetBytes(($bodyLines -join "`r`n") + "`r`n")
-        
-        # 构建footer字节
-        $footerBytes = [System.Text.Encoding]::UTF8.GetBytes("`r`n--$boundary--`r`n")
-        
-        # 合并所有字节
-        $bodyBytes = New-Object byte[] ($headerBytes.Length + $contentBytes.Length + $footerBytes.Length)
-        [System.Buffer]::BlockCopy($headerBytes, 0, $bodyBytes, 0, $headerBytes.Length)
-        [System.Buffer]::BlockCopy($contentBytes, 0, $bodyBytes, $headerBytes.Length, $contentBytes.Length)
-        [System.Buffer]::BlockCopy($footerBytes, 0, $bodyBytes, $headerBytes.Length + $contentBytes.Length, $footerBytes.Length)
-        
-        $contentType = "multipart/form-data; boundary=$boundary"
-        
-        Write-Host "发送HTTP请求..." -ForegroundColor Yellow
-        
-        # 使用WebRequest来发送原始字节
-        $webRequest = [System.Net.WebRequest]::Create($serverUrl)
-        $webRequest.Method = "POST"
-        $webRequest.ContentType = $contentType
-        
-        # 添加show_timeline参数到请求头
-        $webRequest.Headers.Add("X-Show-Timeline", $showTimeline.ToString().ToLower())
-        
-        Write-Host "写入请求体..." -ForegroundColor Yellow
-        $requestStream = $webRequest.GetRequestStream()
-        $requestStream.Write($bodyBytes, 0, $bodyBytes.Length)
-        $requestStream.Close()
-        
-        Write-Host "获取响应..." -ForegroundColor Yellow
-        $response = $webRequest.GetResponse()
-        $responseStream = $response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($responseStream)
-        $responseContent = $reader.ReadToEnd()
-        
-        Write-Host "服务器响应成功!" -ForegroundColor Green
-        
-        # 解析JSON响应
-        $responseJson = $responseContent | ConvertFrom-Json
-        
-        # 保存URL
-        if ($responseJson.url) {
-            $processedUrls += $responseJson.url
-            Write-Host "成功处理文件: $($file.Name)" -ForegroundColor Green
+        if ($response.success) {
+            Write-Host "处理成功" -ForegroundColor Green
+            $viewUrl = "http://localhost:5000$($response.url)"
+            Write-Host "查看地址: $viewUrl"
+            Start-Process $viewUrl
+            return $true
+        }
+        else {
+            Write-Host "处理YouTube URL失败: $($response.error)" -ForegroundColor Red
+            return $false
         }
     }
     catch {
-        Write-Host "处理文件 $($file.Name) 时发生错误: $_" -ForegroundColor Red
-        Write-Host "错误详情: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "处理YouTube URL时出错: $_" -ForegroundColor Red
+        return $false
     }
 }
 
-# 处理完成后，按顺序打开所有URL
-if ($processedUrls.Count -gt 0) {
-    Write-Host "`n所有文件处理完成，正在打开网页..." -ForegroundColor Green
-    foreach ($url in $processedUrls) {
-        Start-Process "http://localhost:5000$url"
-        Start-Sleep -Milliseconds 500  # 添加小延迟，避免浏览器同时打开太多标签
+# 主程序入口
+Write-Host "`n=== SRT字幕转网页查看器 开始执行 ===" -ForegroundColor Green
+Write-Host "时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n"
+
+# 获取剪贴板信息
+$clipboardText = Get-ClipboardText
+$droppedFiles = Get-DroppedFiles
+
+Write-Host "剪贴板内容类型: $(if ($clipboardText) { 'Text' } else { 'None' })"
+Write-Host "剪贴板文件数量: $(if ($droppedFiles) { $droppedFiles.Count } else { '0' })"
+
+# 显示QUICKER_SELECTED_FILES内容
+Write-Host "QUICKER_SELECTED_FILES:"
+if ($env:QUICKER_SELECTED_FILES) {
+    Write-Host $env:QUICKER_SELECTED_FILES
+}
+
+# 处理逻辑
+$processed = $false
+
+# 1. 检查是否是YouTube URL
+if ($clipboardText -match "youtube\.com/watch\?v=|youtu\.be/") {
+    Write-Host "`n检测到YouTube URL，开始处理..."
+    Process-YouTubeUrl -url $clipboardText
+    $processed = $true
+}
+
+# 2. 检查QUICKER_SELECTED_FILES
+if (-not $processed -and $env:QUICKER_SELECTED_FILES) {
+    $files = $env:QUICKER_SELECTED_FILES -split '\|'
+    if ($files) {
+        Process-FilePaths -paths $files
+        $processed = $true
     }
-    
-    # 最后打开文件列表页面
-    Start-Process "http://localhost:5000/view/"
-    
-    [System.Windows.Forms.MessageBox]::Show("成功处理 $($processedUrls.Count) 个文件")
+}
+
+# 3. 检查剪贴板文件
+if (-not $processed -and $droppedFiles) {
+    Process-FilePaths -paths $droppedFiles
+    $processed = $true
+}
+
+# 4. 检查剪贴板文本是否包含文件路径
+if (-not $processed -and $clipboardText -match "^([a-zA-Z]:\\|\\\\).*\.(srt|ass|ssa)$") {
+    $paths = $clipboardText -split "`n" | ForEach-Object { $_.Trim() }
+    Process-FilePaths -paths $paths
+    $processed = $true
+}
+
+# 5. 检查剪贴板文本是否是SRT内容
+if (-not $processed -and $clipboardText -match "^\d+\r?\n\d{2}:\d{2}:\d{2},\d{3}") {
+    Process-SrtContent -content $clipboardText
+    $processed = $true
+}
+
+if (-not $processed) {
+    Write-Host "错误: 未找到有效的srt文件、YouTube URL或内容" -ForegroundColor Red
 }
 
 Write-Host "`n=== 处理完成 ===" -ForegroundColor Green

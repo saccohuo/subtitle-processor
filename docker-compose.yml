@@ -1,0 +1,40 @@
+version: '3'
+
+services:
+  srt-viewer:
+    build: .
+    container_name: srt-viewer
+    restart: always
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./app:/app
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+      - READWISE_API_TOKEN=${READWISE_API_TOKEN}
+    networks:
+      - srt-network
+    depends_on:
+      - funasronline
+
+  funasronline:
+    build:
+      context: .
+      dockerfile: Dockerfile.funasr
+    container_name: funasronline
+    restart: always
+    privileged: true
+    ports:
+      - "10095:10095"
+    volumes:
+      - "./funasr-runtime-resources/models:/workspace/models"
+      - ./funasr-runtime-resources/ssl:/workspace/ssl
+    networks:
+      - srt-network
+
+networks:
+  srt-network:
+    driver: bridge

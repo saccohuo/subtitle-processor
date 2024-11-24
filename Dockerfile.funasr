@@ -1,0 +1,34 @@
+FROM registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-online-cpu-0.1.10
+
+# 安装必要的包
+RUN apt-get update && \
+    apt-get install -y \
+    wget \
+    git \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 huggingface_hub
+RUN pip install --no-cache-dir huggingface_hub
+
+# 设置工作目录
+WORKDIR /workspace
+
+# 创建必要的目录
+RUN mkdir -p /workspace/models /workspace/ssl
+
+# 复制运行脚本
+COPY run.sh /run.sh
+RUN chmod +x /run.sh
+
+# 设置环境变量
+ENV PYTHONPATH="/workspace:${PYTHONPATH}"
+ENV MODELSCOPE_CACHE="/workspace/models"
+ENV MODELSCOPE_DOMAIN="modelscope.cn"
+ENV MODELSCOPE_DOWNLOAD_MODE="force_redownload"
+ENV MODELSCOPE_RETRY_TIMES=3
+ENV MODELSCOPE_RETRY_MULTIPLIER=1.5
+ENV HF_ENDPOINT="https://hf-mirror.com"
+
+# 设置启动命令
+CMD ["/run.sh"]
