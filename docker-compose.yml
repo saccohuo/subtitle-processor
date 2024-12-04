@@ -71,7 +71,7 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_TOKEN=7266906062:AAFV2SdrCgIz30cm7dvnX66HXVjf3AmFGTY
       - SUBTITLE_PROCESSOR_URL=http://subtitle-processor:5000
       # - NO_PROXY=subtitle-processor,localhost,127.0.0.1
       # - ALL_PROXY=http://host.docker.internal:20172
